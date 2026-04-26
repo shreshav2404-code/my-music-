@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mukx",
-    "slug": "mukx",
+    "name": "My Music",
+    "slug": "my-music",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -47,8 +47,9 @@
     "plugins": [],
     "extra": {
       "eas": {
-        "projectId": "wave-local-personal"
+        "projectId": "ed50b364-d6bb-444b-81c3-e1a1db4b4275"
       }
-    }
+    },
+    "owner": "cashewww"
   }
 }
