@@ -2,7 +2,7 @@ node_modules/
 .expo/
 android/
 ios/
-*.png
+/*-*.png
 *.log
 *.xml
 *.db
