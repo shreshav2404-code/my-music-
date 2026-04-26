@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+android/
+ios/
+*.png
+*.log
+*.xml
+*.db
+device-bundle.js
