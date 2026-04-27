@@ -310,7 +310,36 @@ export async function getLyrics(title: string, artist: string): Promise<LyricsRe
   return { plain: '', synced: '' };
 }
 
-// ─── Metadata ─────────────────────────────────────
+// ─── Video Download Resolution ─────────────────────────────────────
+
+export async function resolveVideoUrl(url: string): Promise<{ videoUrl: string; title: string; duration: number }> {
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    throw new Error('Unsupported YouTube URL');
+  }
+
+  const data = await invidiousGet<any>(`/api/v1/videos/${videoId}`);
+  
+  // Get pre-merged MP4 format streams
+  const formatStreams = (data.formatStreams || []).filter((s: any) => s.type?.includes('video/mp4'));
+  
+  // Sort by resolution
+  const sorted = formatStreams.sort((a: any, b: any) => {
+    const resA = parseInt(a.resolution || '0');
+    const resB = parseInt(b.resolution || '0');
+    return resB - resA;
+  });
+
+  if (!sorted.length) {
+    throw new Error('No MP4 video streams available for this video');
+  }
+
+  return {
+    videoUrl: sorted[0].url,
+    title: data.title,
+    duration: data.lengthSeconds,
+  };
+}
 
 export async function getMetadata(url: string): Promise<any> {
   const videoId = extractVideoId(url);
