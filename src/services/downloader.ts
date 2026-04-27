@@ -70,9 +70,9 @@ export async function startDownload(
   if (videoId) {
     const streamData = await getStreamUrl(videoId);
 
-    const audioStreams = (streamData.audioStreams || [])
-      .filter((s) => s.mimeType?.includes('audio'))
-      .sort((a, b) => b.bitrate - a.bitrate);
+    const audioStreams = (streamData.adaptiveFormats || [])
+      .filter((s) => s.type?.includes('audio'))
+      .sort((a, b) => parseInt(b.bitrate || '0') - parseInt(a.bitrate || '0'));
 
     // Pick stream based on desired quality
     let picked = audioStreams[0]; // default: best quality

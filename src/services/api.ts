@@ -1,12 +1,12 @@
 import axios, { AxiosInstance } from 'axios';
 import { LyricsResponse, SearchResponse, StreamResponse, Track } from '../types';
 
-// ─── Free public Piped API instances (YouTube frontend, no API key needed) ───
-const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.adminforge.de',
-  'https://api.piped.projectsegfau.lt',
-  'https://pipedapi.in.projectsegfau.lt',
+// ─── Free public Invidious API instances ───
+const INVIDIOUS_INSTANCES = [
+  'https://inv.thepixora.com',
+  'https://yt.chocolatemoo53.com',
+  'https://invidious.nerdvpn.de',
+  'https://inv.nadeko.net'
 ];
 
 // ─── Jamendo free public API (free client_id for non-commercial use) ───
@@ -17,31 +17,25 @@ const http: AxiosInstance = axios.create({ timeout: 15_000 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-let lastWorkingPiped = 0; // index of last working instance
+let lastWorkingInstance = 0; // index of last working instance
 
-async function pipedGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+async function invidiousGet<T>(path: string, params?: Record<string, string>): Promise<T> {
   let lastError: Error | null = null;
 
-  for (let i = 0; i < PIPED_INSTANCES.length; i++) {
-    const idx = (lastWorkingPiped + i) % PIPED_INSTANCES.length;
-    const base = PIPED_INSTANCES[idx];
+  for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
+    const idx = (lastWorkingInstance + i) % INVIDIOUS_INSTANCES.length;
+    const base = INVIDIOUS_INSTANCES[idx];
 
     try {
-      const resp = await http.get<T>(`${base}${path}`, { params, timeout: 12_000 });
-      lastWorkingPiped = idx;
+      const resp = await http.get<T>(`${base}${path}`, { params, timeout: 8_000 });
+      lastWorkingInstance = idx;
       return resp.data;
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error('Piped request failed');
+      lastError = err instanceof Error ? err : new Error('Invidious request failed');
     }
   }
 
-  throw lastError ?? new Error('All Piped instances failed');
-}
-
-function secondsToReadable(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+  throw lastError ?? new Error('All Invidious instances failed');
 }
 
 function extractVideoId(url: string): string | null {
@@ -57,43 +51,39 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-// ─── YouTube search via Piped ────────────────────────────────────────────────
+// ─── YouTube search via Invidious ────────────────────────────────────────────────
 
-interface PipedSearchItem {
+interface InvidiousSearchItem {
   type: string;
-  url: string;
+  videoId: string;
   title: string;
-  uploaderName: string;
-  uploaderUrl: string;
-  thumbnail: string;
-  duration: number;
-}
-
-interface PipedSearchResponse {
-  items: PipedSearchItem[];
-  nextpage?: string;
+  author: string;
+  authorUrl: string;
+  videoThumbnails: { url: string; quality: string; width: number; height: number }[];
+  lengthSeconds: number;
 }
 
 async function searchYouTube(query: string): Promise<Track[]> {
-  const data = await pipedGet<PipedSearchResponse>('/search', {
+  const items = await invidiousGet<InvidiousSearchItem[]>('/api/v1/search', {
     q: query,
-    filter: 'music_songs',
+    type: 'video',
   });
 
-  return (data.items || [])
-    .filter((item) => item.type === 'stream' && item.duration > 0)
+  return (items || [])
+    .filter((item) => item.type === 'video' && item.lengthSeconds > 0)
     .slice(0, 20)
     .map((item) => {
-      const videoId = item.url?.replace('/watch?v=', '') ?? '';
+      // Get highest res thumbnail
+      const thumb = item.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
       return {
-        id: `yt_${videoId}`,
+        id: `yt_${item.videoId}`,
         title: item.title,
-        artist: item.uploaderName?.replace(/ - Topic$/, '') || 'Unknown Artist',
+        artist: item.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
         album: 'YouTube',
-        duration: item.duration,
-        thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        duration: item.lengthSeconds,
+        thumbnail: thumb || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
         source: 'youtube' as const,
-        sourceUrl: `https://www.youtube.com${item.url}`,
+        sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}`,
       };
     });
 }
@@ -146,32 +136,29 @@ async function searchJamendo(query: string): Promise<Track[]> {
   }
 }
 
-// ─── SoundCloud search via Piped ─────────────────────────────────────────────
+// ─── SoundCloud search via Invidious ─────────────────────────────────────────────
 
 async function searchSoundCloud(query: string): Promise<Track[]> {
-  // Piped doesn't support SoundCloud; we use a basic approach
-  // For now, SoundCloud will show results from YouTube with "(SoundCloud)" note
-  // This can be improved later with a proper SoundCloud proxy
   try {
-    const data = await pipedGet<PipedSearchResponse>('/search', {
+    const items = await invidiousGet<InvidiousSearchItem[]>('/api/v1/search', {
       q: `${query} soundcloud`,
-      filter: 'music_songs',
+      type: 'video',
     });
 
-    return (data.items || [])
-      .filter((item) => item.type === 'stream' && item.duration > 0)
+    return (items || [])
+      .filter((item) => item.type === 'video' && item.lengthSeconds > 0)
       .slice(0, 10)
       .map((item) => {
-        const videoId = item.url?.replace('/watch?v=', '') ?? '';
+        const thumb = item.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
         return {
-          id: `sc_${videoId}`,
+          id: `sc_${item.videoId}`,
           title: item.title,
-          artist: item.uploaderName?.replace(/ - Topic$/, '') || 'Unknown',
+          artist: item.author?.replace(/ - Topic$/, '') || 'Unknown',
           album: 'SoundCloud',
-          duration: item.duration,
-          thumbnail: item.thumbnail || '',
+          duration: item.lengthSeconds,
+          thumbnail: thumb || '',
           source: 'soundcloud' as const,
-          sourceUrl: `https://www.youtube.com${item.url}`,
+          sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}`,
         };
       });
   } catch {
@@ -179,7 +166,7 @@ async function searchSoundCloud(query: string): Promise<Track[]> {
   }
 }
 
-// ─── Unified search (replaces old backend /search endpoint) ──────────────────
+// ─── Unified search ──────────────────
 
 export async function searchTracks(query: string, source: string = 'all'): Promise<SearchResponse> {
   const promises: Promise<Track[]>[] = [];
@@ -211,26 +198,23 @@ export async function searchTracks(query: string, source: string = 'all'): Promi
   };
 }
 
-// ─── Stream URL resolution via Piped (replaces old /stream endpoint) ─────────
+// ─── Stream URL resolution via Invidious ─────────
 
-interface PipedStreamResponse {
+export interface InvidiousVideoResponse {
   title: string;
-  uploader: string;
-  uploaderUrl: string;
-  duration: number;
-  thumbnailUrl: string;
-  audioStreams: Array<{
+  videoId: string;
+  author: string;
+  lengthSeconds: number;
+  videoThumbnails: { url: string; quality: string; width: number; height: number }[];
+  adaptiveFormats: {
+    type: string;
     url: string;
-    format: string;
-    quality: string;
-    mimeType: string;
-    bitrate: number;
-    contentLength: number;
-  }>;
+    bitrate: string;
+  }[];
 }
 
-export async function getStreamUrl(videoId: string): Promise<PipedStreamResponse> {
-  return pipedGet<PipedStreamResponse>(`/streams/${videoId}`);
+export async function getStreamUrl(videoId: string): Promise<InvidiousVideoResponse> {
+  return invidiousGet<InvidiousVideoResponse>(`/api/v1/videos/${videoId}`);
 }
 
 export async function streamFromUrl(url: string, quality: string): Promise<StreamResponse> {
@@ -242,64 +226,68 @@ export async function streamFromUrl(url: string, quality: string): Promise<Strea
   const data = await getStreamUrl(videoId);
 
   // Pick the best audio stream
-  const audioStreams = (data.audioStreams || [])
-    .filter((s) => s.mimeType?.includes('audio'))
-    .sort((a, b) => b.bitrate - a.bitrate);
+  const audioStreams = (data.adaptiveFormats || [])
+    .filter((s) => s.type?.includes('audio'))
+    .sort((a, b) => parseInt(b.bitrate || '0') - parseInt(a.bitrate || '0'));
 
   const best = audioStreams[0];
   if (!best) {
     throw new Error('No audio stream found for this video');
   }
 
+  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+
   return {
     streamUrl: best.url,
-    quality: best.bitrate,
-    duration: data.duration,
+    quality: parseInt(best.bitrate),
+    duration: data.lengthSeconds,
     title: data.title,
-    thumbnail: data.thumbnailUrl,
-    artist: data.uploader?.replace(/ - Topic$/, '') || 'Unknown Artist',
+    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    artist: data.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: url,
   };
 }
 
 export async function resolveStreamByName(query: string, quality: string): Promise<StreamResponse> {
-  // Search Piped and get the first result's stream
-  const searchData = await pipedGet<PipedSearchResponse>('/search', {
+  // Search Invidious and get the first result's stream
+  const items = await invidiousGet<InvidiousSearchItem[]>('/api/v1/search', {
     q: query,
-    filter: 'music_songs',
+    type: 'video',
   });
 
-  const first = (searchData.items || []).find((item) => item.type === 'stream' && item.duration > 0);
+  const first = (items || []).find((item) => item.type === 'video' && item.lengthSeconds > 0);
   if (!first) {
     throw new Error('No results found for streaming');
   }
 
-  const videoId = first.url?.replace('/watch?v=', '') ?? '';
-  const streamData = await getStreamUrl(videoId);
+  const videoId = first.videoId;
+  const data = await getStreamUrl(videoId);
 
-  const audioStreams = (streamData.audioStreams || [])
-    .filter((s) => s.mimeType?.includes('audio'))
-    .sort((a, b) => b.bitrate - a.bitrate);
+  const audioStreams = (data.adaptiveFormats || [])
+    .filter((s) => s.type?.includes('audio'))
+    .sort((a, b) => parseInt(b.bitrate || '0') - parseInt(a.bitrate || '0'));
 
   const best = audioStreams[0];
   if (!best) {
     throw new Error('No audio stream available');
   }
 
+  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+
   return {
     streamUrl: best.url,
-    quality: best.bitrate,
-    duration: streamData.duration,
-    title: streamData.title,
-    thumbnail: streamData.thumbnailUrl,
-    artist: streamData.uploader?.replace(/ - Topic$/, '') || 'Unknown Artist',
+    quality: parseInt(best.bitrate),
+    duration: data.lengthSeconds,
+    title: data.title,
+    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    artist: data.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: `https://www.youtube.com/watch?v=${videoId}`,
   };
 }
 
-// ─── Lyrics (free via lrclib.net — no API key required) ──────────────────────
+// ─── Lyrics (free via lrclib.net) ──────────────────────
 
 export async function getLyrics(title: string, artist: string): Promise<LyricsResponse> {
   try {
@@ -322,7 +310,7 @@ export async function getLyrics(title: string, artist: string): Promise<LyricsRe
   return { plain: '', synced: '' };
 }
 
-// ─── Metadata (resolve info about a URL) ─────────────────────────────────────
+// ─── Metadata ─────────────────────────────────────
 
 export async function getMetadata(url: string): Promise<any> {
   const videoId = extractVideoId(url);
@@ -331,17 +319,18 @@ export async function getMetadata(url: string): Promise<any> {
   }
 
   const data = await getStreamUrl(videoId);
+  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+
   return {
     title: data.title,
-    artist: data.uploader,
-    duration: data.duration,
-    thumbnail: data.thumbnailUrl,
+    artist: data.author,
+    duration: data.lengthSeconds,
+    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
   };
 }
 
-// Also export a dummy `api` for backward-compat with settings test-connection
 const api = http;
 export function getApiBaseUrl(): string {
-  return PIPED_INSTANCES[lastWorkingPiped];
+  return INVIDIOUS_INSTANCES[lastWorkingInstance];
 }
 export default api;
