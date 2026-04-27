@@ -1,7 +1,6 @@
 import * as FileSystem from 'expo-file-system';
 import { v4 as uuidv4 } from 'uuid';
-import EventSource from 'react-native-sse';
-import api, { getApiBaseUrl } from './api';
+import { getStreamUrl } from './api';
 
 interface StartDownloadInput {
   url: string;
@@ -21,50 +20,11 @@ interface StartDownloadOptions {
   onProgress?: (payload: ProgressPayload) => void;
 }
 
-function backendOrigin(): string {
-  const base = getApiBaseUrl();
-  return base.replace(/\/$/, '');
-}
-
 function ensureDownloadsDir(): string {
   const root = FileSystem.documentDirectory || FileSystem.cacheDirectory || '';
   const target = `${root}downloads`;
   FileSystem.makeDirectoryAsync(target, { intermediates: true }).catch(() => undefined);
   return target;
-}
-
-export async function startDownload(
-  input: StartDownloadInput,
-  options: StartDownloadOptions = {},
-): Promise<{ jobId: string; fileUri: string }> {
-  const jobId = uuidv4();
-
-  const startResp = await api.post<{
-    jobId: string;
-    progressUrl: string;
-    fileUrl: string;
-  }>(
-    '/download?mode=async',
-    {
-      url: input.url,
-      quality: input.quality,
-      filename: input.filename,
-      jobId,
-    },
-    {
-      timeout: 30_000,
-    },
-  );
-
-  const { progressUrl, fileUrl } = startResp.data;
-
-  await waitForCompletion(jobId, progressUrl, options.onProgress);
-
-  const downloadPath = `${ensureDownloadsDir()}/${sanitizeName(input.filename || jobId)}.mp3`;
-  const fullFileUrl = `${backendOrigin()}${fileUrl}`;
-
-  const result = await FileSystem.downloadAsync(fullFileUrl, downloadPath);
-  return { jobId, fileUri: result.uri };
 }
 
 function sanitizeName(value: string): string {
@@ -75,38 +35,105 @@ function sanitizeName(value: string): string {
     .slice(0, 120);
 }
 
-function waitForCompletion(
-  jobId: string,
-  progressUrl: string,
-  onProgress?: (payload: ProgressPayload) => void,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const source = new EventSource(`${backendOrigin()}${progressUrl}`);
+function extractVideoId(url: string): string | null {
+  const match = url.match(
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})/,
+  );
+  return match ? match[1] : null;
+}
 
-    source.addEventListener('message', (event) => {
-      try {
-        const payload = JSON.parse(event.data ?? '{}') as ProgressPayload & { event?: string };
-        onProgress?.(payload);
+/**
+ * Downloads a track directly on-device using Piped API for stream URL resolution.
+ * No backend server required!
+ *
+ * For YouTube tracks: resolves stream URL via Piped, then downloads the audio.
+ * For Jamendo tracks: the sourceUrl is already a direct download link.
+ */
+export async function startDownload(
+  input: StartDownloadInput,
+  options: StartDownloadOptions = {},
+): Promise<{ jobId: string; fileUri: string }> {
+  const jobId = uuidv4();
 
-        if (payload.status === 'completed') {
-          source.close();
-          resolve();
-          return;
-        }
-
-        if (payload.status === 'error') {
-          source.close();
-          reject(new Error(payload.message || 'Download failed'));
-        }
-      } catch (error) {
-        source.close();
-        reject(error instanceof Error ? error : new Error('Invalid SSE payload'));
-      }
-    });
-
-    source.addEventListener('error', () => {
-      source.close();
-      reject(new Error(`Download progress stream disconnected for job ${jobId}`));
-    });
+  options.onProgress?.({
+    jobId,
+    percent: 5,
+    status: 'downloading',
+    eta: null,
+    message: 'Resolving stream...',
   });
+
+  let audioUrl: string;
+
+  // Try to resolve a YouTube stream URL
+  const videoId = extractVideoId(input.url);
+  if (videoId) {
+    const streamData = await getStreamUrl(videoId);
+
+    const audioStreams = (streamData.audioStreams || [])
+      .filter((s) => s.mimeType?.includes('audio'))
+      .sort((a, b) => b.bitrate - a.bitrate);
+
+    // Pick stream based on desired quality
+    let picked = audioStreams[0]; // default: best quality
+    if (input.quality <= 128 && audioStreams.length > 1) {
+      picked = audioStreams[audioStreams.length - 1]; // lowest
+    } else if (input.quality <= 192 && audioStreams.length > 2) {
+      picked = audioStreams[Math.floor(audioStreams.length / 2)]; // mid
+    }
+
+    if (!picked) {
+      throw new Error('No audio stream available for download');
+    }
+
+    audioUrl = picked.url;
+  } else {
+    // Non-YouTube URL (e.g. Jamendo direct link) — use as-is
+    audioUrl = input.url;
+  }
+
+  options.onProgress?.({
+    jobId,
+    percent: 15,
+    status: 'downloading',
+    eta: null,
+    message: 'Downloading audio...',
+  });
+
+  const ext = audioUrl.includes('.mp3') || audioUrl.includes('mp3') ? 'mp3' : 'mp4';
+  const downloadPath = `${ensureDownloadsDir()}/${sanitizeName(input.filename || jobId)}.${ext}`;
+
+  const downloadResumable = FileSystem.createDownloadResumable(
+    audioUrl,
+    downloadPath,
+    {},
+    (progress) => {
+      const pct = Math.round(
+        15 + (progress.totalBytesWritten / progress.totalBytesExpectedToWrite) * 80,
+      );
+      options.onProgress?.({
+        jobId,
+        percent: Math.min(pct, 95),
+        status: 'downloading',
+        eta: null,
+        message: `${Math.round(progress.totalBytesWritten / 1024 / 1024)}MB downloaded`,
+      });
+    },
+  );
+
+  const result = await downloadResumable.downloadAsync();
+
+  if (!result?.uri) {
+    throw new Error('Download failed — no file was saved');
+  }
+
+  options.onProgress?.({
+    jobId,
+    percent: 100,
+    status: 'completed',
+    eta: null,
+    message: 'Done!',
+  });
+
+  return { jobId, fileUri: result.uri };
 }

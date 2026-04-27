@@ -3,7 +3,6 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { mmkvStorage } from './mmkvStorage';
 
 interface SettingsState {
-  standaloneMode: boolean;
   streamQuality: 'low' | 'normal' | 'high';
   downloadQuality: 128 | 192 | 320;
   sourcePriority: string[];
@@ -12,7 +11,6 @@ interface SettingsState {
   crossfadeDuration: number;
   normalizeVolume: boolean;
   downloadOnWifiOnly: boolean;
-  backendUrl: string;
   equalizerPreset: string;
   equalizerBands: number[];
   autoScanOnStartup: boolean;
@@ -21,7 +19,6 @@ interface SettingsState {
   sourcesEnabled: Record<string, boolean>;
   setStreamQuality: (value: SettingsState['streamQuality']) => void;
   setDownloadQuality: (value: SettingsState['downloadQuality']) => void;
-  setBackendUrl: (value: string) => void;
   setTheme: (value: SettingsState['theme']) => void;
   setAccentColor: (value: string) => void;
   setCrossfadeDuration: (value: number) => void;
@@ -34,22 +31,27 @@ interface SettingsState {
   setAutoScanOnStartup: (value: boolean) => void;
   setAlbumArtBlurIntensity: (value: number) => void;
   setLyricsOnLockScreen: (value: boolean) => void;
+
+  // Legacy compat — always returns false now
+  standaloneMode: boolean;
+  backendUrl: string;
   setStandaloneMode: (value: boolean) => void;
+  setBackendUrl: (value: string) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
-      standaloneMode: true,
+      standaloneMode: false,
+      backendUrl: '',
       streamQuality: 'high',
       downloadQuality: 320,
-      sourcePriority: ['youtube', 'soundcloud', 'jamendo', 'archive', 'local'],
+      sourcePriority: ['youtube', 'soundcloud', 'jamendo', 'local'],
       theme: 'dark',
       accentColor: '#1DB954',
       crossfadeDuration: 0,
       normalizeVolume: false,
       downloadOnWifiOnly: false,
-      backendUrl: 'http://127.0.0.1:3000',
       equalizerPreset: 'Normal',
       equalizerBands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       autoScanOnStartup: true,
@@ -59,12 +61,11 @@ export const useSettingsStore = create<SettingsState>()(
         youtube: true,
         soundcloud: true,
         jamendo: true,
-        archive: true,
         local: true,
       },
       setStreamQuality: (value) => set({ streamQuality: value }),
       setDownloadQuality: (value) => set({ downloadQuality: value }),
-      setBackendUrl: (value) => set({ backendUrl: value }),
+      setBackendUrl: (_value) => {},
       setTheme: (value) => set({ theme: value }),
       setAccentColor: (value) => set({ accentColor: value }),
       setCrossfadeDuration: (value) => set({ crossfadeDuration: value }),
@@ -85,13 +86,12 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoScanOnStartup: (value) => set({ autoScanOnStartup: value }),
       setAlbumArtBlurIntensity: (value) => set({ albumArtBlurIntensity: value }),
       setLyricsOnLockScreen: (value) => set({ lyricsOnLockScreen: value }),
-      setStandaloneMode: (value) => set({ standaloneMode: value }),
+      setStandaloneMode: (_value) => {},
     }),
     {
       name: 'wave-settings',
       storage: createJSONStorage(() => mmkvStorage),
       partialize: (state) => ({
-        standaloneMode: state.standaloneMode,
         streamQuality: state.streamQuality,
         downloadQuality: state.downloadQuality,
         sourcePriority: state.sourcePriority,
@@ -100,7 +100,6 @@ export const useSettingsStore = create<SettingsState>()(
         crossfadeDuration: state.crossfadeDuration,
         normalizeVolume: state.normalizeVolume,
         downloadOnWifiOnly: state.downloadOnWifiOnly,
-        backendUrl: state.backendUrl,
         equalizerPreset: state.equalizerPreset,
         equalizerBands: state.equalizerBands,
         autoScanOnStartup: state.autoScanOnStartup,

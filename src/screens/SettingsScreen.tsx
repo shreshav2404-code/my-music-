@@ -1,7 +1,6 @@
-import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useMemo } from 'react';
+import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
 import Slider from '@react-native-community/slider';
-import api from '../services/api';
 import { useLocalFiles } from '../hooks/useLocalFiles';
 import { useSettingsStore } from '../store/settingsStore';
 import { useSearchStore } from '../store/searchStore';
@@ -19,45 +18,18 @@ export function SettingsScreen() {
   const settings = useSettingsStore();
   const search = useSearchStore();
   const scanner = useLocalFiles();
-  const [backendInput, setBackendInput] = useState(settings.backendUrl);
-  const [backendStatus, setBackendStatus] = useState<'idle' | 'success' | 'failed'>('idle');
 
   const sourceOrderLabel = useMemo(() => settings.sourcePriority.join(' > '), [settings.sourcePriority]);
-
-  const testConnection = async () => {
-    const normalizedUrl = backendInput.trim();
-    if (!normalizedUrl) {
-      setBackendStatus('failed');
-      return;
-    }
-
-    try {
-      await api.get('/health', {
-        baseURL: normalizedUrl,
-        headers: { 'x-use-custom-baseurl': '1' },
-      });
-      settings.setBackendUrl(normalizedUrl);
-      setBackendStatus('success');
-    } catch {
-      setBackendStatus('failed');
-    }
-  };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Settings</Text>
 
-      <Text style={styles.section}>Mode</Text>
-      <View style={styles.card}>
-        <RowSwitch
-          label="Standalone local mode"
-          value={settings.standaloneMode}
-          onChange={settings.setStandaloneMode}
-        />
-        <Text style={styles.subtle}>
-          {settings.standaloneMode
-            ? 'App works from local library only. No manual backend required.'
-            : 'Online streaming/search/download features are enabled via backend URL.'}
+      {/* Info banner — no server needed */}
+      <View style={styles.infoBanner}>
+        <Text style={styles.infoTitle}>🎵 Fully on-device</Text>
+        <Text style={styles.infoText}>
+          mukx works entirely from your phone — no server required. Search, stream, and download using free public APIs.
         </Text>
       </View>
 
@@ -185,42 +157,11 @@ export function SettingsScreen() {
         </View>
       </View>
 
-      <Text style={styles.section}>Backend</Text>
-      <View style={styles.card}>
-        <Text style={styles.subtle}>
-          {settings.standaloneMode
-            ? 'Standalone mode is ON. Backend is optional.'
-            : 'Backend is required for online search/stream/download.'}
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={backendInput}
-          onChangeText={setBackendInput}
-          placeholder="http://192.168.1.20:3000"
-          placeholderTextColor="#606060"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-
-        <TouchableOpacity style={styles.actionButton} onPress={testConnection}>
-          <Text style={styles.actionText}>Test connection</Text>
-        </TouchableOpacity>
-
-        <Text
-          style={[
-            styles.subtle,
-            backendStatus === 'success' && { color: '#1DB954' },
-            backendStatus === 'failed' && { color: '#FF4444' },
-          ]}
-        >
-          {backendStatus === 'idle' ? 'Connection not tested' : backendStatus === 'success' ? 'Connected' : 'Connection failed'}
-        </Text>
-      </View>
-
       <Text style={styles.section}>About</Text>
       <View style={styles.card}>
         <Text style={styles.subtle}>mukx v1.0.0</Text>
         <Text style={styles.about}>Built with ❤️ by Keshu</Text>
+        <Text style={styles.subtle}>Powered by Piped, Jamendo & lrclib (all free, no API keys)</Text>
         <TouchableOpacity style={styles.actionButton} onPress={search.clearHistory}>
           <Text style={styles.actionText}>Clear search history</Text>
         </TouchableOpacity>
@@ -253,6 +194,25 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '700',
     marginBottom: 10,
+  },
+  infoBanner: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#225A3A',
+    backgroundColor: '#12261B',
+    padding: 14,
+    marginBottom: 6,
+  },
+  infoTitle: {
+    color: '#7DE2A8',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  infoText: {
+    color: '#A0A0A0',
+    fontSize: 12,
+    lineHeight: 18,
   },
   section: {
     color: '#FFFFFF',
@@ -324,15 +284,6 @@ const styles = StyleSheet.create({
     color: '#000000',
     fontWeight: '700',
     fontSize: 13,
-  },
-  input: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-    backgroundColor: '#0F0F0F',
-    color: '#FFFFFF',
-    paddingHorizontal: 12,
-    height: 44,
   },
   colorRow: {
     flexDirection: 'row',

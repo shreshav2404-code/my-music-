@@ -24,7 +24,6 @@ import {
 import { useDownloadStore } from '../store/downloadStore';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePlayerStore } from '../store/playerStore';
-import { useSettingsStore } from '../store/settingsStore';
 import { Track, DownloadItem } from '../types';
 import { RootStackParamList } from '../navigation/types';
 
@@ -160,7 +159,7 @@ export function DownloadsScreen() {
   const { activeDownloads, completedDownloads } = useDownloadStore();
   const library = useLibraryStore();
   const play = usePlayerStore((state) => state.play);
-  const standaloneMode = useSettingsStore((state) => state.standaloneMode);
+
 
   const [activeFilter, setActiveFilter] = useState('all');
   const [storageBytes, setStorageBytes] = useState(0);
@@ -301,15 +300,6 @@ export function DownloadsScreen() {
         <Text style={styles.headerTitle}>Downloads</Text>
       </View>
 
-      {/* Standalone Mode Notice */}
-      {standaloneMode ? (
-        <View style={styles.noticeCard}>
-          <Ionicons name="information-circle" size={18} color="#7DE2A8" />
-          <Text style={styles.noticeText}>
-            Standalone mode — online downloads disabled
-          </Text>
-        </View>
-      ) : null}
 
       {hasContent ? (
         <FlatList

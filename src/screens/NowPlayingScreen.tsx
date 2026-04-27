@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Alert, BackHandler, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { BackHandler, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -10,14 +10,14 @@ import { RootStackParamList } from '../navigation/types';
 import { useDownloadStore } from '../store/downloadStore';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePlayerStore } from '../store/playerStore';
-import { useSettingsStore } from '../store/settingsStore';
+
 import { setSleepTimerMinutes, cancelSleepTimer } from '../services/sleepTimer';
 
 export function NowPlayingScreen({ navigation }: NativeStackScreenProps<RootStackParamList, 'NowPlaying'>) {
   const player = usePlayerStore();
   const download = useDownloadStore((state) => state.startDownload);
   const toggleLike = useLibraryStore((state) => state.toggleLike);
-  const standaloneMode = useSettingsStore((state) => state.standaloneMode);
+
 
   const dynamicColor = useDynamicColor(player.currentTrack?.thumbnail, '#1DB954');
 
@@ -98,10 +98,6 @@ export function NowPlayingScreen({ navigation }: NativeStackScreenProps<RootStac
         <TouchableOpacity
           style={styles.bottomChip}
           onPress={() => {
-            if (standaloneMode) {
-              Alert.alert('Standalone mode is on', 'Disable Standalone mode in Settings to download online tracks.');
-              return;
-            }
             void download(player.currentTrack!, 320);
           }}
         >

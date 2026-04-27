@@ -15,7 +15,7 @@ export function useLibrary() {
         const settings = useSettingsStore.getState();
         const hasSongs = useLibraryStore.getState().songs.length > 0;
 
-        if (settings.standaloneMode && settings.autoScanOnStartup && !hasSongs) {
+        if (settings.autoScanOnStartup && !hasSongs) {
           await scanLocalFiles();
           await store.loadFromDB();
         }

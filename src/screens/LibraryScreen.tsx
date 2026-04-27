@@ -26,7 +26,6 @@ import { usePlayerStore } from '../store/playerStore';
 import { useDownloadStore } from '../store/downloadStore';
 import { resolveStreamByName, streamFromUrl } from '../services/api';
 import { Track, Album, Artist, Playlist } from '../types';
-import { useSettingsStore } from '../store/settingsStore';
 import { kv } from '../utils/storage';
 
 type FilterKey = 'all' | 'playlists' | 'albums' | 'artists' | 'downloaded';
@@ -57,7 +56,7 @@ export function LibraryScreen() {
   const library = useLibraryStore();
   const play = usePlayerStore((state) => state.play);
   const startDownload = useDownloadStore((state) => state.startDownload);
-  const standaloneMode = useSettingsStore((state) => state.standaloneMode);
+
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [sortMode, setSortMode] = useState<SortMode>('recents');
@@ -232,9 +231,6 @@ export function LibraryScreen() {
   const resolvePlayableTrack = async (song: Track): Promise<Track> => {
     if (song.filePath || song.streamUrl) {
       return song;
-    }
-    if (standaloneMode) {
-      throw new Error('This track is online-only. Disable Standalone mode or download it first.');
     }
     if (song.sourceUrl?.startsWith('http')) {
       try {
