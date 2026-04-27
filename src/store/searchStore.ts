@@ -18,6 +18,7 @@ interface SearchState {
   searchLocal: (query: string, songs: Track[]) => void;
   clearResults: () => void;
   clearHistory: () => void;
+  setResults: (results: Track[]) => void;
 }
 
 export const useSearchStore = create<SearchState>()(
@@ -86,6 +87,7 @@ export const useSearchStore = create<SearchState>()(
       },
       clearResults: () => set({ results: [], error: null }),
       clearHistory: () => set({ history: [] }),
+      setResults: (results) => set({ results, error: null }),
     }),
     {
       name: 'wave-search',

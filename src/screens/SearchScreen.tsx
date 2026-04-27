@@ -47,64 +47,23 @@ export function SearchScreen() {
     try {
       if (isUrl(input.trim())) {
         const url = input.trim();
-        Alert.alert(
-          'Link Detected',
-          'What would you like to do with this link?',
-          [
-            {
-              text: 'Play Audio',
-              onPress: async () => {
-                try {
-                  const stream = await streamFromUrl(url, 'high');
-                  const track: Track = {
-                    id: `${stream.source}_${Date.now()}`,
-                    title: stream.title,
-                    artist: stream.artist,
-                    album: 'Single',
-                    duration: stream.duration,
-                    thumbnail: stream.thumbnail,
-                    source: stream.source,
-                    sourceUrl: stream.sourceUrl,
-                    streamUrl: stream.streamUrl,
-                  };
-                  await libraryAdd(track);
-                  await playAction(track, []);
-                } catch (e) {
-                  presentError(e, 'Failed to play audio');
-                }
-              }
-            },
-            {
-              text: 'Download Video (MP4)',
-              onPress: async () => {
-                try {
-                  Alert.alert('Downloading...', 'Please wait while we fetch the video file.');
-                  const videoData = await resolveVideoUrl(url);
-                  
-                  const { status } = await MediaLibrary.requestPermissionsAsync();
-                  if (status !== 'granted') {
-                    Alert.alert('Permission needed', 'We need storage permission to save the video.');
-                    return;
-                  }
-
-                  const safeTitle = videoData.title.replace(/[<>:"/\\|?*]+/g, '').slice(0, 50);
-                  const fileUri = `${FileSystem.documentDirectory}${safeTitle}.mp4`;
-
-                  const { uri } = await FileSystem.downloadAsync(videoData.videoUrl, fileUri);
-                  await MediaLibrary.saveToLibraryAsync(uri);
-                  
-                  // Clean up internal temp file
-                  await FileSystem.deleteAsync(uri, { idempotent: true });
-
-                  Alert.alert('Success!', 'Video saved directly to your phone gallery!');
-                } catch (e) {
-                  presentError(e, 'Failed to download video');
-                }
-              }
-            },
-            { text: 'Cancel', style: 'cancel' }
-          ]
-        );
+        try {
+          const stream = await streamFromUrl(url, 'high');
+          const track: Track = {
+            id: `${stream.source}_${Date.now()}`,
+            title: stream.title,
+            artist: stream.artist,
+            album: 'Single',
+            duration: stream.duration,
+            thumbnail: stream.thumbnail,
+            source: stream.source,
+            sourceUrl: stream.sourceUrl,
+            streamUrl: stream.streamUrl,
+          };
+          searchStore.setResults([track]);
+        } catch (e) {
+          presentError(e, 'Failed to resolve URL');
+        }
         return;
       }
 
