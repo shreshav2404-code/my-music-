@@ -14,7 +14,7 @@ import { useDownloadStore } from '../store/downloadStore';
 import { useLibraryStore } from '../store/libraryStore';
 import { BottomTabParamList } from '../navigation/types';
 
-const filters: Array<'all' | 'youtube' | 'soundcloud' | 'jamendo'> = ['all', 'youtube', 'soundcloud', 'jamendo'];
+const filters: Array<'all' | 'youtube' | 'jamendo'> = ['all', 'youtube', 'jamendo'];
 
 export function SearchScreen() {
   const route = useRoute<RouteProp<BottomTabParamList, 'Search'>>();

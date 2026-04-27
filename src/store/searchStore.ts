@@ -6,7 +6,7 @@ import { mmkvStorage } from './mmkvStorage';
 
 interface SearchState {
   query: string;
-  sourceFilter: 'all' | 'youtube' | 'soundcloud' | 'jamendo';
+  sourceFilter: 'all' | 'youtube' | 'jamendo';
   isLoading: boolean;
   error: string | null;
   results: Track[];

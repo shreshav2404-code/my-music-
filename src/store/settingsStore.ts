@@ -46,7 +46,7 @@ export const useSettingsStore = create<SettingsState>()(
       backendUrl: '',
       streamQuality: 'high',
       downloadQuality: 320,
-      sourcePriority: ['youtube', 'soundcloud', 'jamendo', 'local'],
+      sourcePriority: ['youtube', 'jamendo', 'local'],
       theme: 'dark',
       accentColor: '#1DB954',
       crossfadeDuration: 0,
@@ -59,7 +59,6 @@ export const useSettingsStore = create<SettingsState>()(
       lyricsOnLockScreen: true,
       sourcesEnabled: {
         youtube: true,
-        soundcloud: true,
         jamendo: true,
         local: true,
       },

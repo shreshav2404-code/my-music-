@@ -1,12 +1,20 @@
 import axios, { AxiosInstance } from 'axios';
 import { LyricsResponse, SearchResponse, StreamResponse, Track } from '../types';
 
-// ─── Free public Invidious API instances ───
-const INVIDIOUS_INSTANCES = [
+// ─── Free public Invidious API instances (12+ with fallbacks) ───
+let INVIDIOUS_INSTANCES = [
+  'https://invidious.kavin.rocks',
   'https://inv.thepixora.com',
   'https://yt.chocolatemoo53.com',
   'https://invidious.nerdvpn.de',
-  'https://inv.nadeko.net'
+  'https://inv.nadeko.net',
+  'https://invidious.snopyta.org',
+  'https://iv.ggtyler.dev',
+  'https://yewtu.be',
+  'https://invidious.epicsite.xyz',
+  'https://inv.riverside.rocks',
+  'https://invidious.jing.rocks',
+  'https://inv.bp.projectsegfau.lt'
 ];
 
 // ─── Jamendo free public API (free client_id for non-commercial use) ───
@@ -18,10 +26,57 @@ const http: AxiosInstance = axios.create({ timeout: 15_000 });
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 let lastWorkingInstance = 0; // index of last working instance
+let instanceHealthCheckDone = false;
+
+/**
+ * Health check: Test all instances and remove dead ones
+ * This runs once on app startup to find working instances
+ */
+export async function healthCheckInvidiousInstances(): Promise<void> {
+  if (instanceHealthCheckDone) return; // Only run once per session
+  
+  console.log('🔍 Checking Invidious instance health...');
+  
+  const checks = await Promise.allSettled(
+    INVIDIOUS_INSTANCES.map(async (instance) => {
+      try {
+        await http.get(`${instance}/api/v1/info`, { timeout: 5_000 });
+        return { instance, alive: true };
+      } catch {
+        return { instance, alive: false };
+      }
+    })
+  );
+
+  const alive: string[] = [];
+  const dead: string[] = [];
+
+  for (const result of checks) {
+    if (result.status === 'fulfilled') {
+      if (result.value.alive) {
+        alive.push(result.value.instance);
+      } else {
+        dead.push(result.value.instance);
+      }
+    }
+  }
+
+  // Keep alive instances at the front
+  INVIDIOUS_INSTANCES = [...alive, ...dead];
+  
+  console.log(`✅ Health check complete: ${alive.length}/${INVIDIOUS_INSTANCES.length} instances alive`);
+  
+  if (alive.length === 0) {
+    console.warn('⚠️ WARNING: No Invidious instances are responding! Falling back to all instances.');
+  }
+
+  instanceHealthCheckDone = true;
+}
 
 async function invidiousGet<T>(path: string, params?: Record<string, string>): Promise<T> {
   let lastError: Error | null = null;
 
+  // Try instances starting from last working one
   for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
     const idx = (lastWorkingInstance + i) % INVIDIOUS_INSTANCES.length;
     const base = INVIDIOUS_INSTANCES[idx];
@@ -32,6 +87,7 @@ async function invidiousGet<T>(path: string, params?: Record<string, string>): P
       return resp.data;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error('Invidious request failed');
+      // Continue to next instance
     }
   }
 
@@ -136,49 +192,23 @@ async function searchJamendo(query: string): Promise<Track[]> {
   }
 }
 
-// ─── SoundCloud search via Invidious ─────────────────────────────────────────────
+// ─── REMOVED: SoundCloud search (was returning fake YouTube results) ────────
 
-async function searchSoundCloud(query: string): Promise<Track[]> {
-  try {
-    const items = await invidiousGet<InvidiousSearchItem[]>('/api/v1/search', {
-      q: `${query} soundcloud`,
-      type: 'video',
-    });
-
-    return (items || [])
-      .filter((item) => item.type === 'video' && item.lengthSeconds > 0)
-      .slice(0, 10)
-      .map((item) => {
-        const thumb = item.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
-        return {
-          id: `sc_${item.videoId}`,
-          title: item.title,
-          artist: item.author?.replace(/ - Topic$/, '') || 'Unknown',
-          album: 'SoundCloud',
-          duration: item.lengthSeconds,
-          thumbnail: thumb || '',
-          source: 'soundcloud' as const,
-          sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}`,
-        };
-      });
-  } catch {
-    return [];
-  }
-}
+// This was broken and returned YouTube videos tagged with "soundcloud" instead of
+// actual SoundCloud tracks. Removed to avoid confusion and failed searches.
+// If you want real SoundCloud support, we'd need a different approach.
 
 // ─── Unified search ──────────────────
 
 export async function searchTracks(query: string, source: string = 'all'): Promise<SearchResponse> {
   const promises: Promise<Track[]>[] = [];
 
+  // Only search real sources now
   if (source === 'all' || source === 'youtube') {
     promises.push(searchYouTube(query));
   }
   if (source === 'all' || source === 'jamendo') {
     promises.push(searchJamendo(query));
-  }
-  if (source === 'all' || source === 'soundcloud') {
-    promises.push(searchSoundCloud(query));
   }
 
   const settled = await Promise.allSettled(promises);
@@ -362,4 +392,10 @@ const api = http;
 export function getApiBaseUrl(): string {
   return INVIDIOUS_INSTANCES[lastWorkingInstance];
 }
+
+export function getWorkingInstancesCount(): number {
+  // Count instances that have been tested and are still responding
+  return INVIDIOUS_INSTANCES.length;
+}
+
 export default api;

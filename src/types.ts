@@ -1,4 +1,4 @@
-export type SourceName = 'youtube' | 'soundcloud' | 'jamendo' | 'archive' | 'local';
+export type SourceName = 'youtube' | 'jamendo' | 'archive' | 'local';
 
 export type RepeatMode = 'off' | 'one' | 'all';
 
@@ -72,7 +72,7 @@ export interface StreamResponse {
   title: string;
   thumbnail: string;
   artist: string;
-  source: SourceName;
+  source: 'youtube' | 'jamendo' | 'archive' | 'local';
   sourceUrl: string;
 }
 

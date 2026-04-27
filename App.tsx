@@ -9,7 +9,7 @@ import { RootNavigator } from './src/navigation/RootNavigator';
 import { MiniPlayer } from './src/components/player/MiniPlayer';
 import { useLibrary } from './src/hooks/useLibrary';
 import { usePlayer } from './src/hooks/usePlayer';
-import { streamFromUrl } from './src/services/api';
+import { streamFromUrl, healthCheckInvidiousInstances } from './src/services/api';
 import { useLibraryStore } from './src/store/libraryStore';
 import { usePlayerStore } from './src/store/playerStore';
 import { Track } from './src/types';
@@ -17,6 +17,11 @@ import { Track } from './src/types';
 export default function App() {
   useLibrary();
   usePlayer();
+
+  // Run health check on app startup
+  useEffect(() => {
+    healthCheckInvidiousInstances();
+  }, []);
 
   useEffect(() => {
     const handleDeepLink = async (url: string) => {
