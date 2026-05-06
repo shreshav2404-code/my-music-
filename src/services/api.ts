@@ -74,24 +74,39 @@ export async function healthCheckInvidiousInstances(): Promise<void> {
 }
 
 async function invidiousGet<T>(path: string, params?: Record<string, string>): Promise<T> {
-  let lastError: Error | null = null;
+  // Try the top 3 instances simultaneously! The first to respond wins.
+  // This completely eliminates latency from waiting on a dead instance.
+  const indicesToTry = [
+    lastWorkingInstance,
+    (lastWorkingInstance + 1) % INVIDIOUS_INSTANCES.length,
+    (lastWorkingInstance + 2) % INVIDIOUS_INSTANCES.length
+  ];
 
-  // Try instances starting from last working one
-  for (let i = 0; i < INVIDIOUS_INSTANCES.length; i++) {
-    const idx = (lastWorkingInstance + i) % INVIDIOUS_INSTANCES.length;
-    const base = INVIDIOUS_INSTANCES[idx];
+  const requests = indicesToTry.map((idx) => 
+    http.get<T>(`${INVIDIOUS_INSTANCES[idx]}${path}`, { params, timeout: 4_000 })
+      .then(resp => {
+        lastWorkingInstance = idx;
+        return resp.data;
+      })
+  );
 
-    try {
-      const resp = await http.get<T>(`${base}${path}`, { params, timeout: 8_000 });
-      lastWorkingInstance = idx;
-      return resp.data;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error('Invidious request failed');
-      // Continue to next instance
+  try {
+    return await Promise.any(requests);
+  } catch (e) {
+    // If all 3 concurrent requests fail, fallback to a standard sequential loop
+    let lastError: Error | null = null;
+    for (let i = 3; i < INVIDIOUS_INSTANCES.length; i++) {
+      const idx = (lastWorkingInstance + i) % INVIDIOUS_INSTANCES.length;
+      try {
+        const resp = await http.get<T>(`${INVIDIOUS_INSTANCES[idx]}${path}`, { params, timeout: 8_000 });
+        lastWorkingInstance = idx;
+        return resp.data;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error('Invidious request failed');
+      }
     }
+    throw lastError ?? new Error('All Invidious instances failed');
   }
-
-  throw lastError ?? new Error('All Invidious instances failed');
 }
 
 function extractVideoId(url: string): string | null {
@@ -247,40 +262,82 @@ export async function getStreamUrl(videoId: string): Promise<InvidiousVideoRespo
   return invidiousGet<InvidiousVideoResponse>(`/api/v1/videos/${videoId}`);
 }
 
+// ─── RapidAPI Fallback Configuration ─────────
+const RAPID_APIS = [
+  {
+    host: 'youtube-mp36.p.rapidapi.com',
+    url: 'https://youtube-mp36.p.rapidapi.com/dl',
+    key: '1dfb3784e1mshb640fd231f7f5e7p172c9ejsn6de7a6bce21a',
+    getParams: (id: string) => ({ id }),
+    extractLink: (data: any) => data.link || data.url || data.download
+  },
+  {
+    host: 'yt-search-and-download-mp3.p.rapidapi.com',
+    url: 'https://yt-search-and-download-mp3.p.rapidapi.com/mp3',
+    key: '1dfb3784e1mshb640fd231f7f5e7p172c9ejsn6de7a6bce21a',
+    getParams: (id: string) => ({ url: `https://www.youtube.com/watch?v=${id}` }),
+    extractLink: (data: any) => data.download || data.url
+  }
+];
+
+async function getAudioStreamUrl(videoId: string): Promise<string> {
+  let lastError = null;
+
+  for (const api of RAPID_APIS) {
+    try {
+      const response = await axios.request({
+        method: 'GET',
+        url: api.url,
+        params: api.getParams(videoId),
+        headers: {
+          'x-rapidapi-key': api.key,
+          'x-rapidapi-host': api.host
+        },
+        timeout: 10000
+      });
+
+      const streamUrl = api.extractLink(response.data);
+      if (streamUrl) {
+        return streamUrl;
+      }
+    } catch (e: any) {
+      console.warn(`API ${api.host} failed:`, e.message);
+      lastError = e;
+    }
+  }
+
+  throw new Error(`All RapidAPIs failed to resolve audio stream. Last error: ${lastError?.message}`);
+}
+
 export async function streamFromUrl(url: string, quality: string): Promise<StreamResponse> {
   const videoId = extractVideoId(url);
   if (!videoId) {
     throw new Error('Invalid YouTube URL');
   }
 
-  const data = await getStreamUrl(videoId);
+  // Run metadata + stream resolution in parallel. Metadata is best-effort
+  // so a dead Invidious instance won't block playback.
+  const [metaResult, streamUrl] = await Promise.all([
+    getStreamUrl(videoId).catch(() => null),
+    getAudioStreamUrl(videoId)
+  ]);
 
-  // Pick the best audio stream
-  const audioStreams = (data.adaptiveFormats || [])
-    .filter((s) => s.type?.includes('audio'))
-    .sort((a, b) => parseInt(b.bitrate || '0') - parseInt(a.bitrate || '0'));
-
-  const best = audioStreams[0];
-  if (!best) {
-    throw new Error('No audio stream found for this video');
-  }
-
-  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+  const thumb = metaResult?.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
 
   return {
-    streamUrl: best.url,
-    quality: parseInt(best.bitrate),
-    duration: data.lengthSeconds,
-    title: data.title,
+    streamUrl: streamUrl,
+    quality: 128000,
+    duration: metaResult?.lengthSeconds ?? 0,
+    title: metaResult?.title ?? 'Unknown Title',
     thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    artist: data.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
+    artist: metaResult?.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: url,
   };
 }
 
 export async function resolveStreamByName(query: string, quality: string): Promise<StreamResponse> {
-  // Search Invidious and get the first result's stream
+  // Search Invidious and get the first result
   const items = await invidiousGet<InvidiousSearchItem[]>('/api/v1/search', {
     q: query,
     type: 'video',
@@ -292,26 +349,20 @@ export async function resolveStreamByName(query: string, quality: string): Promi
   }
 
   const videoId = first.videoId;
-  const data = await getStreamUrl(videoId);
 
-  const audioStreams = (data.adaptiveFormats || [])
-    .filter((s) => s.type?.includes('audio'))
-    .sort((a, b) => parseInt(b.bitrate || '0') - parseInt(a.bitrate || '0'));
+  // Get the stream URL from RapidAPI. We already have metadata from the search result,
+  // so there's no need for a second Invidious call.
+  const streamUrl = await getAudioStreamUrl(videoId);
 
-  const best = audioStreams[0];
-  if (!best) {
-    throw new Error('No audio stream available');
-  }
-
-  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+  const thumb = first.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
 
   return {
-    streamUrl: best.url,
-    quality: parseInt(best.bitrate),
-    duration: data.lengthSeconds,
-    title: data.title,
+    streamUrl: streamUrl,
+    quality: 128000,
+    duration: first.lengthSeconds,
+    title: first.title,
     thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    artist: data.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
+    artist: first.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: `https://www.youtube.com/watch?v=${videoId}`,
   };
