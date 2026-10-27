@@ -8,11 +8,13 @@ interface Props {
   isLoading: boolean;
   error: string | null;
   results: Track[];
+  loadingTrackId?: string | null;
   onPlay: (track: Track) => void;
   onDownload: (track: Track) => void;
+  onMore?: (track: Track) => void;
 }
 
-export function SearchResults({ isLoading, error, results, onPlay, onDownload }: Props) {
+export function SearchResults({ isLoading, error, results, loadingTrackId, onPlay, onDownload, onMore }: Props) {
   if (isLoading) {
     return (
       <View style={styles.loadingWrap}>
@@ -36,7 +38,16 @@ export function SearchResults({ isLoading, error, results, onPlay, onDownload }:
       data={results}
       keyExtractor={(item) => item.id}
       contentContainerStyle={styles.list}
-      renderItem={({ item }) => <TrackCard track={item} onPress={onPlay} onDownload={onDownload} />}
+      extraData={loadingTrackId}
+      renderItem={({ item }) => (
+        <TrackCard
+          track={item}
+          isLoading={item.id === loadingTrackId}
+          onPress={onPlay}
+          onDownload={onDownload}
+          onMore={onMore}
+        />
+      )}
       ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
       ListHeaderComponent={<Text style={styles.count}>{results.length} results</Text>}
       showsVerticalScrollIndicator={false}

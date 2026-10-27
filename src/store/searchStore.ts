@@ -21,6 +21,9 @@ interface SearchState {
   setResults: (results: Track[]) => void;
 }
 
+// Only the latest search may write results; slower earlier ones are dropped.
+let searchRequest = 0;
+
 export const useSearchStore = create<SearchState>()(
   persist(
     (set, get) => ({
@@ -40,13 +43,20 @@ export const useSearchStore = create<SearchState>()(
           return;
         }
 
+        const request = ++searchRequest;
         set({ isLoading: true, error: null, query: normalized });
 
         try {
           const response = await searchTracks(normalized, get().sourceFilter);
+          if (request !== searchRequest) {
+            return;
+          }
           const history = [normalized, ...get().history.filter((entry) => entry !== normalized)].slice(0, 20);
           set({ results: response.results, isLoading: false, history });
         } catch (error) {
+          if (request !== searchRequest) {
+            return;
+          }
           set({
             isLoading: false,
             error: error instanceof Error ? error.message : 'Search failed',

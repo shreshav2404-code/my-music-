@@ -17,6 +17,7 @@ export function NowPlayingScreen({ navigation }: NativeStackScreenProps<RootStac
   const player = usePlayerStore();
   const download = useDownloadStore((state) => state.startDownload);
   const toggleLike = useLibraryStore((state) => state.toggleLike);
+  const likedSongs = useLibraryStore((state) => state.likedSongs);
 
 
   const dynamicColor = useDynamicColor(player.currentTrack?.thumbnail, '#1DB954');
@@ -73,7 +74,7 @@ export function NowPlayingScreen({ navigation }: NativeStackScreenProps<RootStac
       </View>
 
       <FullPlayer
-        track={player.currentTrack}
+        track={{ ...player.currentTrack, isLiked: likedSongs.includes(player.currentTrack.id) }}
         isPlaying={player.isPlaying}
         position={player.position}
         duration={player.duration || player.currentTrack.duration}

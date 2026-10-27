@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import { CONFIG } from '../constants/config';
 import { LyricsResponse, SearchResponse, StreamResponse, Track } from '../types';
 
 // ─── Free public Invidious API instances (12+ with fallbacks) ───
@@ -40,7 +41,7 @@ export async function healthCheckInvidiousInstances(): Promise<void> {
   const checks = await Promise.allSettled(
     INVIDIOUS_INSTANCES.map(async (instance) => {
       try {
-        await http.get(`${instance}/api/v1/info`, { timeout: 5_000 });
+        await http.get(`${instance}/api/v1/stats`, { timeout: 5_000 });
         return { instance, alive: true };
       } catch {
         return { instance, alive: false };
@@ -61,8 +62,10 @@ export async function healthCheckInvidiousInstances(): Promise<void> {
     }
   }
 
-  // Keep alive instances at the front
+  // Keep alive instances at the front. Reset the cursor because indices now
+  // point at different instances.
   INVIDIOUS_INSTANCES = [...alive, ...dead];
+  lastWorkingInstance = 0;
   
   console.log(`✅ Health check complete: ${alive.length}/${INVIDIOUS_INSTANCES.length} instances alive`);
   
@@ -73,7 +76,7 @@ export async function healthCheckInvidiousInstances(): Promise<void> {
   instanceHealthCheckDone = true;
 }
 
-async function invidiousGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+async function invidiousGetWithBase<T>(path: string, params?: Record<string, string>): Promise<{ data: T; base: string }> {
   // Try the top 3 instances simultaneously! The first to respond wins.
   // This completely eliminates latency from waiting on a dead instance.
   const indicesToTry = [
@@ -82,13 +85,14 @@ async function invidiousGet<T>(path: string, params?: Record<string, string>): P
     (lastWorkingInstance + 2) % INVIDIOUS_INSTANCES.length
   ];
 
-  const requests = indicesToTry.map((idx) => 
-    http.get<T>(`${INVIDIOUS_INSTANCES[idx]}${path}`, { params, timeout: 4_000 })
+  const requests = indicesToTry.map((idx) => {
+    const base = INVIDIOUS_INSTANCES[idx];
+    return http.get<T>(`${base}${path}`, { params, timeout: 4_000 })
       .then(resp => {
         lastWorkingInstance = idx;
-        return resp.data;
-      })
-  );
+        return { data: resp.data, base };
+      });
+  });
 
   try {
     return await Promise.any(requests);
@@ -97,10 +101,11 @@ async function invidiousGet<T>(path: string, params?: Record<string, string>): P
     let lastError: Error | null = null;
     for (let i = 3; i < INVIDIOUS_INSTANCES.length; i++) {
       const idx = (lastWorkingInstance + i) % INVIDIOUS_INSTANCES.length;
+      const base = INVIDIOUS_INSTANCES[idx];
       try {
-        const resp = await http.get<T>(`${INVIDIOUS_INSTANCES[idx]}${path}`, { params, timeout: 8_000 });
+        const resp = await http.get<T>(`${base}${path}`, { params, timeout: 8_000 });
         lastWorkingInstance = idx;
-        return resp.data;
+        return { data: resp.data, base };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error('Invidious request failed');
       }
@@ -109,7 +114,12 @@ async function invidiousGet<T>(path: string, params?: Record<string, string>): P
   }
 }
 
-function extractVideoId(url: string): string | null {
+async function invidiousGet<T>(path: string, params?: Record<string, string>): Promise<T> {
+  return (await invidiousGetWithBase<T>(path, params)).data;
+}
+
+export function extractVideoId(url: string | undefined): string | null {
+  if (!url) return null;
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})/,
   ];
@@ -120,6 +130,12 @@ function extractVideoId(url: string): string | null {
   }
 
   return null;
+}
+
+// maxresdefault is missing for many music uploads (YouTube serves a grey
+// placeholder), so always use hqdefault which exists for every video.
+export function youtubeThumbnail(videoId: string): string {
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
 
 // ─── YouTube search via Invidious ────────────────────────────────────────────────
@@ -144,15 +160,13 @@ async function searchYouTube(query: string): Promise<Track[]> {
     .filter((item) => item.type === 'video' && item.lengthSeconds > 0)
     .slice(0, 20)
     .map((item) => {
-      // Get highest res thumbnail
-      const thumb = item.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
       return {
         id: `yt_${item.videoId}`,
         title: item.title,
         artist: item.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
         album: 'YouTube',
         duration: item.lengthSeconds,
-        thumbnail: thumb || `https://i.ytimg.com/vi/${item.videoId}/hqdefault.jpg`,
+        thumbnail: youtubeThumbnail(item.videoId),
         source: 'youtube' as const,
         sourceUrl: `https://www.youtube.com/watch?v=${item.videoId}`,
       };
@@ -178,33 +192,29 @@ interface JamendoSearchResponse {
 }
 
 async function searchJamendo(query: string): Promise<Track[]> {
-  try {
-    const resp = await http.get<JamendoSearchResponse>(`${JAMENDO_BASE}/tracks/`, {
-      params: {
-        client_id: JAMENDO_CLIENT_ID,
-        format: 'json',
-        limit: '15',
-        search: query,
-        include: 'musicinfo',
-        audiodlformat: 'mp32',
-      },
-      timeout: 10_000,
-    });
+  const resp = await http.get<JamendoSearchResponse>(`${JAMENDO_BASE}/tracks/`, {
+    params: {
+      client_id: JAMENDO_CLIENT_ID,
+      format: 'json',
+      limit: '15',
+      search: query,
+      include: 'musicinfo',
+      audiodlformat: 'mp32',
+    },
+    timeout: 10_000,
+  });
 
-    return (resp.data.results || []).map((t) => ({
-      id: `jam_${t.id}`,
-      title: t.name,
-      artist: t.artist_name,
-      album: t.album_name || 'Jamendo',
-      duration: t.duration,
-      thumbnail: t.image,
-      source: 'jamendo' as const,
-      sourceUrl: t.shareurl,
-      streamUrl: t.audio,  // Jamendo gives direct stream URLs!
-    }));
-  } catch {
-    return [];
-  }
+  return (resp.data.results || []).map((t) => ({
+    id: `jam_${t.id}`,
+    title: t.name,
+    artist: t.artist_name,
+    album: t.album_name || 'Jamendo',
+    duration: t.duration,
+    thumbnail: t.image,
+    source: 'jamendo' as const,
+    sourceUrl: t.shareurl,
+    streamUrl: t.audio,  // Jamendo gives direct stream URLs!
+  }));
 }
 
 // ─── REMOVED: SoundCloud search (was returning fake YouTube results) ────────
@@ -228,11 +238,20 @@ export async function searchTracks(query: string, source: string = 'all'): Promi
 
   const settled = await Promise.allSettled(promises);
   const results: Track[] = [];
+  let firstError: unknown = null;
 
   for (const result of settled) {
     if (result.status === 'fulfilled') {
       results.push(...result.value);
+    } else if (!firstError) {
+      firstError = result.reason;
     }
+  }
+
+  // Show an error instead of an empty "no results" list when we couldn't reach
+  // the sources at all (e.g. offline or every Invidious instance is down).
+  if (results.length === 0 && firstError) {
+    throw new Error('Could not reach music sources. Check your connection and try again.');
   }
 
   return {
@@ -262,6 +281,33 @@ export async function getStreamUrl(videoId: string): Promise<InvidiousVideoRespo
   return invidiousGet<InvidiousVideoResponse>(`/api/v1/videos/${videoId}`);
 }
 
+/**
+ * Best audio-only format proxied through the Invidious instance (`local=true`).
+ * Direct googlevideo links are locked to the instance's IP and 403 on-device.
+ */
+export async function getProxiedAudioFormat(videoId: string): Promise<{ url: string; mimeType: string }> {
+  const { data, base } = await invidiousGetWithBase<InvidiousVideoResponse>(`/api/v1/videos/${videoId}`, {
+    local: 'true',
+  });
+
+  const audio = (data.adaptiveFormats || [])
+    .filter((f) => f.type?.startsWith('audio/') && f.url)
+    .sort((a, b) => {
+      // Prefer AAC (audio/mp4) for player compatibility, then higher bitrate.
+      const mp4Diff = Number(b.type.startsWith('audio/mp4')) - Number(a.type.startsWith('audio/mp4'));
+      return mp4Diff || parseInt(b.bitrate || '0', 10) - parseInt(a.bitrate || '0', 10);
+    })[0];
+
+  if (!audio) {
+    throw new Error('No audio stream available for this video');
+  }
+
+  return {
+    url: audio.url.startsWith('/') ? `${base}${audio.url}` : audio.url,
+    mimeType: audio.type,
+  };
+}
+
 // ─── RapidAPI Fallback Configuration ─────────
 const RAPID_APIS = [
   {
@@ -279,6 +325,43 @@ const RAPID_APIS = [
     extractLink: (data: any) => data.download || data.url
   }
 ];
+
+// Resolved links stay valid for a while but not forever, so cache them for
+// STREAM_CACHE_TTL_MS. In-flight requests are shared so a prefetch and a play
+// of the same video never cost two API calls.
+const audioUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const audioUrlInflight = new Map<string, Promise<string>>();
+
+export function getCachedYouTubeAudioUrl(videoId: string): string | null {
+  const entry = audioUrlCache.get(videoId);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    audioUrlCache.delete(videoId);
+    return null;
+  }
+  return entry.url;
+}
+
+export function invalidateYouTubeAudioUrl(videoId: string): void {
+  audioUrlCache.delete(videoId);
+}
+
+export function resolveYouTubeAudioUrl(videoId: string): Promise<string> {
+  const cached = getCachedYouTubeAudioUrl(videoId);
+  if (cached) return Promise.resolve(cached);
+
+  let pending = audioUrlInflight.get(videoId);
+  if (!pending) {
+    pending = getAudioStreamUrl(videoId)
+      .then((url) => {
+        audioUrlCache.set(videoId, { url, expiresAt: Date.now() + CONFIG.STREAM_CACHE_TTL_MS });
+        return url;
+      })
+      .finally(() => audioUrlInflight.delete(videoId));
+    audioUrlInflight.set(videoId, pending);
+  }
+  return pending;
+}
 
 async function getAudioStreamUrl(videoId: string): Promise<string> {
   let lastError = null;
@@ -319,17 +402,15 @@ export async function streamFromUrl(url: string, quality: string): Promise<Strea
   // so a dead Invidious instance won't block playback.
   const [metaResult, streamUrl] = await Promise.all([
     getStreamUrl(videoId).catch(() => null),
-    getAudioStreamUrl(videoId)
+    resolveYouTubeAudioUrl(videoId)
   ]);
-
-  const thumb = metaResult?.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
 
   return {
     streamUrl: streamUrl,
     quality: 128000,
     duration: metaResult?.lengthSeconds ?? 0,
     title: metaResult?.title ?? 'Unknown Title',
-    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnail: youtubeThumbnail(videoId),
     artist: metaResult?.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: url,
@@ -352,19 +433,37 @@ export async function resolveStreamByName(query: string, quality: string): Promi
 
   // Get the stream URL from RapidAPI. We already have metadata from the search result,
   // so there's no need for a second Invidious call.
-  const streamUrl = await getAudioStreamUrl(videoId);
-
-  const thumb = first.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
+  const streamUrl = await resolveYouTubeAudioUrl(videoId);
 
   return {
     streamUrl: streamUrl,
     quality: 128000,
     duration: first.lengthSeconds,
     title: first.title,
-    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnail: youtubeThumbnail(videoId),
     artist: first.author?.replace(/ - Topic$/, '') || 'Unknown Artist',
     source: 'youtube',
     sourceUrl: `https://www.youtube.com/watch?v=${videoId}`,
+  };
+}
+
+/**
+ * Builds a library Track from a resolved stream. YouTube tracks get the same
+ * `yt_<videoId>` id search results use, so pasting a link to a song that's
+ * already in the library doesn't create a duplicate entry.
+ */
+export function trackFromStream(stream: StreamResponse): Track {
+  const videoId = extractVideoId(stream.sourceUrl);
+  return {
+    id: videoId ? `yt_${videoId}` : `${stream.source}_${Date.now()}`,
+    title: stream.title,
+    artist: stream.artist,
+    album: 'Single',
+    duration: stream.duration,
+    thumbnail: stream.thumbnail,
+    source: stream.source,
+    sourceUrl: videoId ? `https://www.youtube.com/watch?v=${videoId}` : stream.sourceUrl,
+    streamUrl: stream.streamUrl,
   };
 }
 
@@ -429,13 +528,12 @@ export async function getMetadata(url: string): Promise<any> {
   }
 
   const data = await getStreamUrl(videoId);
-  const thumb = data.videoThumbnails?.sort((a, b) => b.width - a.width)[0]?.url;
 
   return {
     title: data.title,
     artist: data.author,
     duration: data.lengthSeconds,
-    thumbnail: thumb || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    thumbnail: youtubeThumbnail(videoId),
   };
 }
 

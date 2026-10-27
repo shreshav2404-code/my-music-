@@ -13,8 +13,7 @@ export function QueueScreen({ navigation }: NativeStackScreenProps<RootStackPara
         currentTrackId={player.currentTrack?.id}
         queue={player.queue}
         onSelect={async (track) => {
-          const rest = player.queue.filter((entry) => entry.id !== track.id);
-          await player.play(track, rest);
+          await player.skipTo(track.id);
           navigation.goBack();
         }}
         onRemove={player.removeFromQueue}

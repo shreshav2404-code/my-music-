@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   FlatList,
@@ -24,10 +25,12 @@ import {
 import { useDownloadStore } from '../store/downloadStore';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePlayerStore } from '../store/playerStore';
+import { useSettingsStore } from '../store/settingsStore';
+import { DOWNLOADS_DIR } from '../services/downloader';
 import { Track, DownloadItem } from '../types';
 import { RootStackParamList } from '../navigation/types';
 
-const downloadsRoot = `${FileSystem.documentDirectory || ''}downloads`;
+const downloadsRoot = DOWNLOADS_DIR;
 
 const filterChips = [
   { key: 'all', label: 'All' },
@@ -50,6 +53,9 @@ async function directorySize(path: string): Promise<number> {
 function DownloadingRow({ item }: { item: DownloadItem }) {
   const progressPercent = Math.min(100, Math.max(0, item.progress));
   const cancelDownload = useDownloadStore((state) => state.cancelDownload);
+  const retryDownload = useDownloadStore((state) => state.retryDownload);
+  const downloadQuality = useSettingsStore((state) => state.downloadQuality);
+  const failed = item.status === 'error';
 
   return (
     <View style={styles.dlRow}>
@@ -66,9 +72,13 @@ function DownloadingRow({ item }: { item: DownloadItem }) {
             <Ionicons name="musical-notes" size={20} color="#535353" />
           </View>
         )}
-        {/* Spinner overlay */}
+        {/* Status overlay */}
         <View style={styles.spinnerOverlay}>
-          <Ionicons name="reload" size={20} color="#1DB954" />
+          {failed ? (
+            <Ionicons name="alert-circle" size={20} color="#FF5A5A" />
+          ) : (
+            <ActivityIndicator size="small" color="#1DB954" />
+          )}
         </View>
       </View>
 
@@ -76,19 +86,38 @@ function DownloadingRow({ item }: { item: DownloadItem }) {
         <Text style={styles.dlTitle} numberOfLines={1}>
           {item.song.title}
         </Text>
-        <Text style={styles.dlSubtitle}>
-          {Math.round(progressPercent)}%
-          {item.eta ? ` • ${item.eta}s remaining` : ''}
-          {item.message ? ` • ${item.message}` : ''}
-        </Text>
-        <View style={styles.dlProgressTrack}>
-          <View style={[styles.dlProgressFill, { width: `${progressPercent}%` }]} />
-        </View>
+        {failed ? (
+          <Text style={styles.dlError} numberOfLines={2}>
+            {item.message || 'Download failed'}
+          </Text>
+        ) : (
+          <>
+            <Text style={styles.dlSubtitle} numberOfLines={1}>
+              {Math.round(progressPercent)}%
+              {item.eta ? ` • ${item.eta}s remaining` : ''}
+              {item.message ? ` • ${item.message}` : ''}
+            </Text>
+            <View style={styles.dlProgressTrack}>
+              <View style={[styles.dlProgressFill, { width: `${progressPercent}%` }]} />
+            </View>
+          </>
+        )}
       </View>
+
+      {failed ? (
+        <TouchableOpacity
+          style={styles.dlCancelBtn}
+          onPress={() => void retryDownload(item.id, downloadQuality)}
+          accessibilityLabel="Retry download"
+        >
+          <Ionicons name="refresh" size={20} color="#1DB954" />
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity
         style={styles.dlCancelBtn}
         onPress={() => cancelDownload(item.id)}
+        accessibilityLabel={failed ? 'Dismiss' : 'Cancel download'}
       >
         <Ionicons name="close" size={20} color="#B3B3B3" />
       </TouchableOpacity>
@@ -159,7 +188,8 @@ export function DownloadsScreen() {
   const { activeDownloads, completedDownloads } = useDownloadStore();
   const library = useLibraryStore();
   const play = usePlayerStore((state) => state.play);
-
+  const playNext = usePlayerStore((state) => state.playNext);
+  const [playlistPickerFor, setPlaylistPickerFor] = useState<Track | null>(null);
 
   const [activeFilter, setActiveFilter] = useState('all');
   const [storageBytes, setStorageBytes] = useState(0);
@@ -187,7 +217,7 @@ export function DownloadsScreen() {
   const handlePlay = useCallback(
     async (song: Track) => {
       try {
-        await play(song, downloadedSongs);
+        await play(song, downloadedSongs.filter((entry) => entry.id !== song.id));
       } catch (error) {
         Alert.alert(
           'Playback failed',
@@ -209,12 +239,21 @@ export function DownloadsScreen() {
       {
         icon: 'play-skip-forward',
         label: 'Play next',
-        onPress: () => {},
+        onPress: () => {
+          if (menuTarget) void playNext(menuTarget);
+        },
       },
       {
         icon: 'add',
         label: 'Add to playlist',
-        onPress: () => {},
+        onPress: () => {
+          if (!menuTarget) return;
+          if (library.playlists.length === 0) {
+            Alert.alert('No playlists yet', 'Create a playlist from the Library tab first.');
+            return;
+          }
+          setPlaylistPickerFor(menuTarget);
+        },
       },
       {
         icon: 'heart-outline',
@@ -245,7 +284,19 @@ export function DownloadsScreen() {
         destructive: true,
       },
     ];
-  }, [menuTarget, library]);
+  }, [menuTarget, library, playNext]);
+
+  const playlistItems: BottomSheetMenuItem[] = useMemo(
+    () =>
+      library.playlists.map((playlist) => ({
+        icon: 'musical-notes-outline' as const,
+        label: playlist.name,
+        onPress: () => {
+          if (playlistPickerFor) void library.addToPlaylist(playlist.id, playlistPickerFor.id);
+        },
+      })),
+    [library, playlistPickerFor],
+  );
 
   const hasActiveDownloads = activeDownloads.length > 0;
   const hasDownloadedSongs = downloadedSongs.length > 0;
@@ -351,6 +402,14 @@ export function DownloadsScreen() {
         title={menuTarget?.title}
         subtitle={menuTarget?.artist}
         items={menuItems}
+      />
+
+      <BottomSheetMenu
+        visible={playlistPickerFor !== null}
+        onClose={() => setPlaylistPickerFor(null)}
+        title="Add to playlist"
+        subtitle={playlistPickerFor?.title}
+        items={playlistItems}
       />
     </View>
   );
@@ -465,6 +524,10 @@ const styles = StyleSheet.create({
   },
   dlSubtitle: {
     color: '#A0A0A0',
+    fontSize: 13,
+  },
+  dlError: {
+    color: '#FF7A7A',
     fontSize: 13,
   },
   dlProgressTrack: {

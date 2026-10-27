@@ -5,13 +5,15 @@ import { useSearch } from '../hooks/useSearch';
 import { SearchBar } from '../components/search/SearchBar';
 import { SearchResults } from '../components/search/SearchResults';
 import { isUrl } from '../utils/string';
-import { resolveStreamByName, streamFromUrl, resolveVideoUrl } from '../services/api';
+import { streamFromUrl, resolveVideoUrl, trackFromStream } from '../services/api';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { usePlayerStore } from '../store/playerStore';
 import { Track } from '../types';
 import { useDownloadStore } from '../store/downloadStore';
 import { useLibraryStore } from '../store/libraryStore';
+import { useSettingsStore } from '../store/settingsStore';
+import { BottomSheetMenu, BottomSheetMenuItem } from '../components/ui/BottomSheetMenu';
 import { BottomTabParamList } from '../navigation/types';
 
 const filters: Array<'all' | 'youtube' | 'jamendo'> = ['all', 'youtube', 'jamendo'];
@@ -21,8 +23,13 @@ export function SearchScreen() {
   const [input, setInput] = useState('');
   const searchStore = useSearch();
   const playAction = usePlayerStore((state) => state.play);
+  const addToQueue = usePlayerStore((state) => state.addToQueue);
+  const playNext = usePlayerStore((state) => state.playNext);
+  const loadingTrackId = usePlayerStore((state) => state.loadingTrackId);
   const downloadAction = useDownloadStore((state) => state.startDownload);
+  const downloadQuality = useSettingsStore((state) => state.downloadQuality);
   const libraryAdd = useLibraryStore((state) => state.addSong);
+  const [menuTarget, setMenuTarget] = useState<Track | null>(null);
 
   const presentError = (error: unknown, fallbackMessage: string) => {
     const message = error instanceof Error ? error.message : fallbackMessage;
@@ -55,18 +62,7 @@ export function SearchScreen() {
               text: 'Play Audio',
               onPress: async () => {
                 try {
-                  const stream = await streamFromUrl(url, 'high');
-                  const track: Track = {
-                    id: `${stream.source}_${Date.now()}`,
-                    title: stream.title,
-                    artist: stream.artist,
-                    album: 'Single',
-                    duration: stream.duration,
-                    thumbnail: stream.thumbnail,
-                    source: stream.source,
-                    sourceUrl: stream.sourceUrl,
-                    streamUrl: stream.streamUrl,
-                  };
+                  const track = trackFromStream(await streamFromUrl(url, 'high'));
                   searchStore.setResults([track]);
                   await libraryAdd(track);
                   await playAction(track, []);
@@ -80,20 +76,9 @@ export function SearchScreen() {
               onPress: async () => {
                 try {
                   Alert.alert('Fetching...', 'Resolving audio stream...');
-                  const stream = await streamFromUrl(url, 'high');
-                  const track: Track = {
-                    id: `${stream.source}_${Date.now()}`,
-                    title: stream.title,
-                    artist: stream.artist,
-                    album: 'Single',
-                    duration: stream.duration,
-                    thumbnail: stream.thumbnail,
-                    source: stream.source,
-                    sourceUrl: stream.sourceUrl,
-                    streamUrl: stream.streamUrl,
-                  };
+                  const track = trackFromStream(await streamFromUrl(url, 'high'));
                   searchStore.setResults([track]);
-                  void downloadAction(track, 320);
+                  void downloadAction(track, downloadQuality);
                 } catch (e) {
                   presentError(e, 'Failed to download audio');
                 }
@@ -137,36 +122,42 @@ export function SearchScreen() {
     }
   };
 
+  // The player resolves a fresh stream itself (straight from the video id for
+  // YouTube results, so the exact video you tapped is the one that plays).
   const playTrack = async (track: Track) => {
     try {
-      let toPlay = track;
-
-      // If it's a local file, play directly
-      if (track.filePath) {
-        await playAction(track, []);
-        return;
-      }
-
-      // If track already has a stream URL (e.g. Jamendo), play directly
-      if (track.streamUrl) {
-        await libraryAdd(toPlay);
-        await playAction(toPlay, []);
-        return;
-      }
-
-      // Resolve stream URL via Piped for YouTube tracks
-      const resolved = await resolveStreamByName(`${track.title} ${track.artist}`, 'high');
-      toPlay = {
-        ...track,
-        streamUrl: resolved.streamUrl,
-        sourceUrl: resolved.sourceUrl,
-      };
-      await libraryAdd(toPlay);
-      await playAction(toPlay, []);
+      await libraryAdd(track);
+      await playAction(track, []);
     } catch (error) {
       presentError(error, 'Unable to play this track');
     }
   };
+
+  const menuItems: BottomSheetMenuItem[] = menuTarget
+    ? [
+        {
+          icon: 'play-skip-forward',
+          label: 'Play next',
+          onPress: () => {
+            void playNext(menuTarget).catch((error) => presentError(error, 'Unable to queue this track'));
+          },
+        },
+        {
+          icon: 'list',
+          label: 'Add to queue',
+          onPress: () => {
+            void addToQueue(menuTarget).catch((error) => presentError(error, 'Unable to queue this track'));
+          },
+        },
+        {
+          icon: 'download-outline',
+          label: 'Download',
+          onPress: () => {
+            void downloadAction(menuTarget, downloadQuality);
+          },
+        },
+      ]
+    : [];
 
   const changeFilter = (filter: (typeof filters)[number]) => {
     searchStore.setSourceFilter(filter);
@@ -231,12 +222,22 @@ export function SearchScreen() {
           isLoading={searchStore.isLoading}
           error={searchStore.error}
           results={searchStore.results}
+          loadingTrackId={loadingTrackId}
           onPlay={playTrack}
           onDownload={(track) => {
-            void downloadAction(track, 320);
+            void downloadAction(track, downloadQuality);
           }}
+          onMore={setMenuTarget}
         />
       )}
+
+      <BottomSheetMenu
+        visible={menuTarget !== null}
+        onClose={() => setMenuTarget(null)}
+        title={menuTarget?.title}
+        subtitle={menuTarget?.artist}
+        items={menuItems}
+      />
     </View>
   );
 }

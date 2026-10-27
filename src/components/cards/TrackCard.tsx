@@ -1,18 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Track } from '../../types';
 import { formatDuration } from '../../utils/format';
 import { SourceBadge } from '../search/SourceBadge';
 
 interface Props {
   track: Track;
+  /** Shows a spinner while the track's stream is being resolved. */
+  isLoading?: boolean;
   onPress: (track: Track) => void | Promise<void>;
   onDownload?: (track: Track) => void | Promise<void>;
   onMore?: (track: Track) => void | Promise<void>;
 }
 
-export function TrackCard({ track, onPress, onDownload, onMore }: Props) {
+export function TrackCard({ track, isLoading, onPress, onDownload, onMore }: Props) {
   const runSafe = (action: (() => void | Promise<void>) | undefined) => {
     if (!action) {
       return;
@@ -38,6 +40,7 @@ export function TrackCard({ track, onPress, onDownload, onMore }: Props) {
       </View>
 
       <View style={styles.actions}>
+        {isLoading ? <ActivityIndicator size="small" color="#1DB954" style={styles.iconButton} /> : null}
         {onDownload ? (
           <TouchableOpacity style={styles.iconButton} onPress={() => runSafe(() => onDownload(track))}>
             <Ionicons name={track.isDownloaded ? 'checkmark-circle' : 'download-outline'} size={20} color="#FFFFFF" />

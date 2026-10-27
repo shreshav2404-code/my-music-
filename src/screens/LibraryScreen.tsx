@@ -5,6 +5,7 @@ import {
   Alert,
   FlatList,
   Pressable,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -24,16 +25,18 @@ import { BottomTabParamList, RootStackParamList } from '../navigation/types';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePlayerStore } from '../store/playerStore';
 import { useDownloadStore } from '../store/downloadStore';
-import { resolveStreamByName, streamFromUrl } from '../services/api';
+import { useSettingsStore } from '../store/settingsStore';
 import { Track, Album, Artist, Playlist } from '../types';
 import { kv } from '../utils/storage';
 
-type FilterKey = 'all' | 'playlists' | 'albums' | 'artists' | 'downloaded';
+type FilterKey = 'all' | 'songs' | 'liked' | 'playlists' | 'albums' | 'artists' | 'downloaded';
 type SortMode = 'recents' | 'recently_added' | 'alphabetical';
 type ViewMode = 'list' | 'grid';
 
 const filterChips = [
   { key: 'all', label: 'All' },
+  { key: 'songs', label: 'Songs' },
+  { key: 'liked', label: 'Liked' },
   { key: 'playlists', label: 'Playlists' },
   { key: 'albums', label: 'Albums' },
   { key: 'artists', label: 'Artists' },
@@ -50,12 +53,19 @@ interface LibraryEntry {
   data: Track | Album | Artist | Playlist | null;
 }
 
+function isSongEntry(entry: LibraryEntry): boolean {
+  return entry.id.startsWith('song_') && !!entry.data;
+}
+
 export function LibraryScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<BottomTabParamList, 'Library'>>();
   const library = useLibraryStore();
   const play = usePlayerStore((state) => state.play);
+  const addToQueue = usePlayerStore((state) => state.addToQueue);
+  const playNext = usePlayerStore((state) => state.playNext);
   const startDownload = useDownloadStore((state) => state.startDownload);
+  const downloadQuality = useSettingsStore((state) => state.downloadQuality);
 
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
@@ -72,15 +82,15 @@ export function LibraryScreen() {
   useEffect(() => {
     if (route.params?.initialTab) {
       const tabMap: Record<string, FilterKey> = {
-        Songs: 'all',
+        Songs: 'songs',
         Albums: 'albums',
         Artists: 'artists',
         Playlists: 'playlists',
       };
       setActiveFilter(tabMap[route.params.initialTab] || 'all');
     }
-    if (route.params?.initialFilter === 'downloaded') {
-      setActiveFilter('downloaded');
+    if (route.params?.initialFilter === 'downloaded' || route.params?.initialFilter === 'liked') {
+      setActiveFilter(route.params.initialFilter);
     }
   }, [route.params?.requestId, route.params?.initialTab, route.params?.initialFilter]);
 
@@ -163,14 +173,16 @@ export function LibraryScreen() {
       });
     }
 
-    // Downloaded songs (only in the downloaded filter)
-    if (activeFilter === 'downloaded') {
+    // Song lists for the songs / liked / downloaded filters
+    if (activeFilter === 'songs' || activeFilter === 'liked' || activeFilter === 'downloaded') {
       library.songs
-        .filter((s) => s.isDownloaded)
+        .filter((s) =>
+          activeFilter === 'liked' ? s.isLiked : activeFilter === 'downloaded' ? s.isDownloaded : true,
+        )
         .forEach((s) => {
           items.push({
             id: `song_${s.id}`,
-            type: 'playlist', // Use playlist styling for songs in downloaded
+            type: 'playlist', // Use playlist styling for song rows
             title: s.title,
             subtitle: `${s.artist}`,
             thumbnail: s.thumbnail || undefined,
@@ -192,10 +204,7 @@ export function LibraryScreen() {
 
   const handleItemPress = (entry: LibraryEntry) => {
     if (entry.id === '__liked__') {
-      navigation.navigate('MainTabs', {
-        screen: 'Library',
-        params: { initialTab: 'Songs', initialFilter: 'liked', requestId: Date.now() },
-      });
+      setActiveFilter('liked');
       return;
     }
     if (entry.id === '__downloaded__') {
@@ -217,54 +226,27 @@ export function LibraryScreen() {
       navigation.navigate('Artist', { artistName: (entry.data as Artist).name });
       return;
     }
-    // If it's a downloaded song, play it
-    if (entry.data && 'title' in entry.data && 'artist' in entry.data) {
+    // Song rows: play it, followed by the rest of the visible list
+    if (isSongEntry(entry)) {
       handlePlay(entry.data as Track);
     }
   };
 
   const handleItemLongPress = (entry: LibraryEntry) => {
+    if (!isSongEntry(entry) && entry.type !== 'playlist') {
+      return;
+    }
     setMenuTarget(entry);
     setMenuVisible(true);
   };
 
-  const resolvePlayableTrack = async (song: Track): Promise<Track> => {
-    if (song.filePath || song.streamUrl) {
-      return song;
-    }
-    if (song.sourceUrl?.startsWith('http')) {
-      try {
-        const streamed = await streamFromUrl(song.sourceUrl, 'high');
-        return {
-          ...song,
-          streamUrl: streamed.streamUrl,
-          sourceUrl: streamed.sourceUrl,
-          duration: song.duration || streamed.duration,
-          thumbnail: song.thumbnail || streamed.thumbnail,
-          artist: song.artist || streamed.artist,
-          source: streamed.source,
-        };
-      } catch {
-        // fallback to query resolution
-      }
-    }
-    const resolved = await resolveStreamByName(`${song.title} ${song.artist}`, 'high');
-    return {
-      ...song,
-      streamUrl: resolved.streamUrl,
-      sourceUrl: resolved.sourceUrl,
-      duration: song.duration || resolved.duration,
-      thumbnail: song.thumbnail || resolved.thumbnail,
-      artist: song.artist || resolved.artist,
-      source: resolved.source,
-    };
-  };
-
   const handlePlay = async (song: Track) => {
+    const visibleSongs = entries.filter(isSongEntry).map((entry) => entry.data as Track);
+    const index = visibleSongs.findIndex((entry) => entry.id === song.id);
+    const upNext = index >= 0 ? visibleSongs.slice(index + 1) : [];
+
     try {
-      const playable = await resolvePlayableTrack(song);
-      await play(playable, []);
-      void library.addSong(playable);
+      await play(song, upNext);
     } catch (error) {
       Alert.alert('Playback failed', error instanceof Error ? error.message : 'Unable to play this track');
     }
@@ -288,41 +270,64 @@ export function LibraryScreen() {
 
   const getMenuItems = (): BottomSheetMenuItem[] => {
     if (!menuTarget) return [];
-    const items: BottomSheetMenuItem[] = [];
 
-    if (menuTarget.data && 'streamUrl' in menuTarget.data) {
-      items.push({
-        icon: 'play',
-        label: 'Play',
-        onPress: () => {
-          if (menuTarget.data) handlePlay(menuTarget.data as Track);
+    if (isSongEntry(menuTarget)) {
+      const song = menuTarget.data as Track;
+      return [
+        { icon: 'play', label: 'Play', onPress: () => handlePlay(song) },
+        { icon: 'play-skip-forward', label: 'Play next', onPress: () => void playNext(song) },
+        { icon: 'list', label: 'Add to queue', onPress: () => void addToQueue(song) },
+        {
+          icon: song.isLiked ? 'heart-dislike-outline' : 'heart-outline',
+          label: song.isLiked ? 'Unlike song' : 'Like song',
+          onPress: () => void library.toggleLike(song.id),
         },
-      });
-      items.push({
-        icon: 'list',
-        label: 'Add to queue',
-        onPress: () => {},
-      });
+        ...(!song.isDownloaded && song.source !== 'local'
+          ? [{ icon: 'download-outline' as const, label: 'Download', onPress: () => void startDownload(song, downloadQuality) }]
+          : []),
+        {
+          icon: 'share-outline',
+          label: 'Share',
+          onPress: () => {
+            void Share.share({
+              message: song.sourceUrl?.startsWith('http')
+                ? `${song.title} by ${song.artist} — ${song.sourceUrl}`
+                : `${song.title} by ${song.artist}`,
+            });
+          },
+        },
+        {
+          icon: 'trash-outline',
+          label: 'Remove from library',
+          destructive: true,
+          onPress: () => {
+            Alert.alert('Remove from library', `Remove "${song.title}"${song.isDownloaded ? ' and its download' : ''}?`, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Remove', style: 'destructive', onPress: () => void library.removeSong(song.id) },
+            ]);
+          },
+        },
+      ];
     }
 
-    items.push({
-      icon: 'pin',
-      label: 'Pin to library',
-      onPress: () => {},
-    });
-    items.push({
-      icon: 'share-outline',
-      label: 'Share',
-      onPress: () => {},
-    });
-    items.push({
-      icon: 'trash-outline',
-      label: 'Remove from library',
-      onPress: () => {},
-      destructive: true,
-    });
+    if (menuTarget.type === 'playlist' && menuTarget.data && 'createdAt' in menuTarget.data) {
+      const playlist = menuTarget.data as Playlist;
+      return [
+        {
+          icon: 'trash-outline',
+          label: 'Delete playlist',
+          destructive: true,
+          onPress: () => {
+            Alert.alert('Delete playlist', `Delete "${playlist.name}"? Songs stay in your library.`, [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: () => void library.deletePlaylist(playlist.id) },
+            ]);
+          },
+        },
+      ];
+    }
 
-    return items;
+    return [];
   };
 
   const renderListItem = ({ item }: { item: LibraryEntry }) => (
@@ -394,6 +399,8 @@ export function LibraryScreen() {
   const hasContent = entries.length > 0;
   const emptyMessages: Record<FilterKey, { title: string; message: string }> = {
     all: { title: 'Your library is empty', message: 'Songs you save will appear here' },
+    songs: { title: 'No songs yet', message: 'Songs you play or download will appear here' },
+    liked: { title: 'No liked songs yet', message: 'Tap the heart on a song to save it here' },
     playlists: { title: 'No playlists yet', message: 'Create a playlist to get started' },
     albums: { title: 'No albums yet', message: 'Albums will appear once songs are indexed' },
     artists: { title: 'No artists yet', message: 'Artists are generated from your songs' },
