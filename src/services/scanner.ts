@@ -7,7 +7,7 @@ import { Track } from '../types';
 import { ensureMediaLibraryPermission } from '../utils/permissions';
 import { generateId } from '../utils/string';
 
-const supportedExtensions = ['.mp3', '.flac', '.wav', '.m4a', '.aac'];
+const supportedExtensions = ['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.opus'];
 
 interface ScanOptions {
   onProgress?: (percent: number, scanned: number, total: number) => void;

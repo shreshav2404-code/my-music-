@@ -199,6 +199,8 @@ async function searchJamendo(query: string): Promise<Track[]> {
       limit: '15',
       search: query,
       include: 'musicinfo',
+      // mp32 is Jamendo's high-quality VBR MP3; the default (mp31) is 96 kbps.
+      audioformat: 'mp32',
       audiodlformat: 'mp32',
     },
     timeout: 10_000,
